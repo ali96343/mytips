@@ -1,0 +1,103 @@
+# http://www.web2py.com/AlterEgo/default/show/189
+
+The web2py database Abstraction layer can read most Django models and SQLAlchemy models. This means you can use them together with web2py, use web2py migrations and all of web2py supported backends (including the Google App Engine). You do not need to install Django or SQLAlchemy for this to work. This is experimental and needs more testing. This is not recommended nor suggested but it was developed as a convenience tool to port your existing python apps to web2py.
+
+Django Model in web2py
+0) Start web2py and make an app called "yourapp"
+
+1) download django.py and save it in yourapp/modules/django.py
+
+2) create a web2py model yourapp/models/db.py and write this in it:
+
+### web2py specific
+from applications.yourapp.modules.django import *
+db=DAL('postgresql://....')
+Model=DjangoModelFactory(db,migrate=True)
+### end web2py specific
+
+# example of Django model in a web2py model
+
+class Poll(Model):
+    name=CharField('Name',max_length=32,null=True)
+    description=TextField(null=True,blank=True)
+    created_on=DateField(null=True,blank=True)
+
+class Choice(Model):
+    poll=ForeignKey(Poll)
+    value=CharField(validator_list=[isLowerCase],choices=((1,1),(2,2)))
+
+class Person(Model):
+    name=CharField('Full Name',max_length=64,null=True)
+    choices=ManyToManyField(Choice)
+3) DONE!
+
+The example defines Poll, Choice, Person as web2py SQLTables.
+
+You can access the model via the auto-generated web2py database admin interface.
+
+You can use normal web2py syntax
+
+id=Poll.insert(name='test')
+for row in db(Poll.id==id).select(): print row.name
+You CANNOT use Django syntax like
+
+p=Poll(name='test') # NO!
+p.save() # NO!
+Attention:
+
+1) many Django field types and Django validators have been ported but not all of them
+
+2) the validators that have been ported apply to web2py forms but they are not exactly identical. For example isValidURL is not quite the same as ISURL. The web2py validators are more sophisticated than Django's (ISINTINRANGE vs isInteger) but Django has more. Sometime we do things differently: for example we do not check if isValidHTML, we just sanitize the output with XML(...,sanitize=True).
+
+3) the ManyToManyField will create the intermediate table, as Django does.
+
+4) notice that django.py defines a DjangoModelFactory, not a Model class. The DjangoModelFactory needs a database connection (db) and needs to know if the tables exist (migrate=False) or not (migrate=True). If migrate==True, web2py will migrate the tables if the definition changes. Thus you get Django syntax + web2py migration power!
+
+5) I am not suggesting using this normally. It is much better in the long run to use the native web2py API but this may lower the entry barrier for current Django users.
+
+6) I think I am mapping the right default for the field attributes but I may have done mistakes.
+
+Please give it a try and let me know if you encounter any problem.
+
+Hopefully Django users and developers will see this an opportunity not as a threat and will help us improve it.
+
+SQLAlchemy models in web2py
+0) Start web2py and make an app called "yourapp"
+
+1) download sqlalchemy.py and save it in yourapp/modules/sqlalchemy.py
+
+2) create a web2py model yourapp/models/db.py and write this in it:
+
+### web2py specific
+from applications.yourapp.modules.sqlalchemy import *
+db=DAL('postgresql://....')
+metadata=MetaData(db)
+### end web2py specific code
+
+# example of SQLAlchemy model in a web2py model
+
+users = Table('users', metadata,
+   Column('id', Integer),
+   Column('name', String(40)),
+   Column('age', Integer),
+   Column('password', String),
+   Column('blob1',Binary),
+)
+
+dogs = Table('dogs', metadata,
+   Column('id', Integer),
+   Column('name', String(40)),
+   Column('owner', ForeignKey('users.id')),
+)
+3) DONE!
+
+You can use normal web2py syntax such as
+
+id=users.insert(name='Test')
+dogs.insert(name='Snoopy',owner=id)
+for row in db(dogs.owner==users.id).select():
+    print row.dogs.name,row.users.name
+Hopefully SQLAlchemy users and developers will see this an opportunity not as a threat and will help us improve it.
+
+read more
+
