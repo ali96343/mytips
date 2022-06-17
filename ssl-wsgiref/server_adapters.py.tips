@@ -1,0 +1,199 @@
+import logging
+
+from ombott.server_adapters import ServerAdapter
+
+try:
+    from .utils.wsservers import *
+except ImportError:
+    wsservers_list = []
+
+__all__ = [
+    "geventWebSocketServer",
+    "wsgirefThreadingServer",
+    "rocketServer",
+] + wsservers_list
+
+def geventWebSocketServer():
+    from gevent import pywsgi
+    from geventwebsocket.handler import WebSocketHandler
+    from geventwebsocket.logging import create_logger
+
+    class GeventWebSocketServer(ServerAdapter):
+        def run(self, handler):
+            server = pywsgi.WSGIServer(
+                (self.host, self.port),
+                handler,
+                handler_class=WebSocketHandler,
+                **self.options
+            )
+
+            if not self.quiet:
+                server.logger = create_logger("geventwebsocket.logging")
+                server.logger.setLevel(logging.INFO)
+                server.logger.addHandler(logging.StreamHandler())
+
+            server.serve_forever()
+
+    return GeventWebSocketServer
+
+
+def wsgirefThreadingServer():
+    # https://www.electricmonk.nl/log/2016/02/15/multithreaded-dev-web-server-for-the-python-bottle-web-framework/
+
+    import socket, ssl
+    from concurrent.futures import ThreadPoolExecutor  # pip install futures
+    from socketserver import ThreadingMixIn
+    from wsgiref.simple_server import (WSGIRequestHandler, WSGIServer,
+                                       make_server)
+
+    class WSGIRefThreadingServer(ServerAdapter):
+        def run(this, app):
+
+            if not this.quiet:
+                logging.basicConfig(
+                    filename="wsgiref.log",
+                    format="%(threadName)s | %(message)s",
+                    filemode="a",
+                    encoding="utf-8",
+                    level=logging.DEBUG,
+                )
+
+                this.log = logging.getLogger("wsgiref")
+
+            class PoolMixIn(ThreadingMixIn):
+                def process_request(self, request, client_address):
+                    self.pool.submit(
+                        self.process_request_thread, request, client_address
+                    )
+
+            class ThreadingWSGIServer(PoolMixIn, WSGIServer):
+                daemon_threads = True
+                pool = ThreadPoolExecutor(max_workers=40)
+
+            class Server:
+                def __init__(
+                    self, server_address=("127.0.0.1", 8000), handler_cls=None
+                ):
+                    self.wsgi_app = None
+                    self.listen, self.port = server_address
+                    self.handler_cls = handler_cls
+
+                def set_app(self, app):
+                    self.wsgi_app = app
+
+                def get_app(self):
+                    return self.wsgi_app
+
+                def serve_forever(self):
+                    self.server = make_server(
+                        self.listen,
+                        self.port,
+                        self.wsgi_app,
+                        ThreadingWSGIServer,
+                        self.handler_cls,
+                    )
+
+# openssl req -new -x509 -keyout server.pem -out server.pem -days 365 -nodes
+#  openssl s_client -showcerts -connect 127.0.0.1:8443
+# ./py4web.py run apps -s wsgirefThreadingServer  --watch=off --port=8443 --ssl_cert=server.pem
+
+#  ./py4web.py run apps -s wsgirefThreadingServer  --watch=off --port=8443 --ssl_cert=cert.pem --ssl_key=key.pem
+
+# curl -O --insecure --header 'Host: www.example.com' -I https://207.5.1.10/file.html
+### OR ###
+# curl -k --header 'Host: www.example.com' -I https://207.5.1.10/file.html
+# https://www.cyberciti.biz/faq/how-to-curl-ignore-ssl-certificate-warnings-command-option/
+
+# subject=C = RU, ST = Saint Petersburg, O = SPB, OU = AliBsk, CN = localhost
+# openssl req -x509 -newkey rsa:4096 -nodes -out cert.pem -keyout key.pem -days 365
+# https://stackoverflow.com/questions/62651383/python-pyopenssl-signed-certificate-error-firefox-sec-error-reused-issuer-and
+# https://stackoverflow.com/questions/27164354/create-a-self-signed-x509-certificate-in-python
+# http://www.zedwood.com/article/python-create-self-signed-cert
+
+
+
+# https://www.treitos.com/blog/old/ssl-encryption-in-python-bottle.html
+# https://blog.miguelgrinberg.com/post/running-your-flask-application-over-https
+# https://github.com/ali01/bottle-sslify/blob/master/bottle_sslify.py
+# https://devopscube.com/create-self-signed-certificates-openssl/
+
+                    certfile = this.options.get("certfile", None)
+
+                    if certfile :
+                        self.server.socket = ssl.wrap_socket (
+                            self.server.socket,
+                            certfile= certfile,
+                            keyfile= this.options.get("keyfile", None),
+                            ssl_version=ssl.PROTOCOL_TLSv1_2,
+                            server_side= True,
+                        )
+
+                    self.server.serve_forever()
+
+#            class FixedHandler(WSGIRequestHandler):
+#                def address_string(self):  # Prevent reverse DNS lookups please.
+#                    return self.client_address[0]
+# 
+#                def log_request(*args, **kw):
+#                    if not this.quiet:
+#                        return WSGIRequestHandler.log_request(*args, **kw)
+#             handler_cls = this.options.get("handler_class", FixedHandler)
+ 
+            class LogHandler(WSGIRequestHandler):
+                def address_string(self):  # Prevent reverse DNS lookups please.
+                    return self.client_address[0]
+
+                def log_message(self, format, *args):
+                    if not this.quiet:  # and ( not args[1] in ['200', '304']) :
+                        msg = "%s - - [%s] %s" % (
+                            self.client_address[0],
+                            self.log_date_time_string(),
+                            format % args,
+                        )
+                        this.log.info(msg)
+
+            handler_cls = this.options.get("handler_class", LogHandler)
+            server_cls = Server
+
+            if ":" in this.host:  # Fix wsgiref for IPv6 addresses.
+                if getattr(server_cls, "address_family") == socket.AF_INET:
+
+                    class server_cls(server_cls):
+                        address_family = socket.AF_INET6
+
+            srv = make_server(this.host, this.port, app, server_cls, handler_cls)
+            srv.serve_forever()
+
+    return WSGIRefThreadingServer
+
+
+# https://piware.de/2011/01/creating-an-https-server-in-python/
+# https://groups.google.com/g/bottlepy/c/F1n_1Vw2x-8
+# I've found a simple way to implement this based on the technique described here:
+# http://www.piware.de/2011/01/creating-an-https-server-in-python/
+
+# The idea is that you use a WSGIRefServer as before, 
+# but just wrap the socket with ssl prior to serving. 
+# I've uploaded an example to github if anyone's interested:
+# https://github.com/mfm24/miscpython/blob/master/bottle_ssl.py
+
+# (It's also on my blog at http://www.socouldanyone.com/2014/01/bottle-with-ssl.html)
+
+def rocketServer():
+    try:
+        from rocket3 import Rocket3 as Rocket
+    except ImportError:
+        from .rocket3 import Rocket3 as Rocket
+    import logging.handlers
+
+    class RocketServer(ServerAdapter):
+        def run(self, app):
+            if not self.quiet:
+                log = logging.getLogger("Rocket")
+                log.setLevel(logging.INFO)
+                log.addHandler(logging.StreamHandler())
+            interface = (self.host, self.port, self.options["keyfile"], self.options["certfile"]) if self.options.get("certfile", None) else (self.host, self.port)
+            server = Rocket(interface, "wsgi", dict(wsgi_app=app))
+            server.start()
+
+    return RocketServer
