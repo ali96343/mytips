@@ -1,0 +1,4 @@
+https://mleue.com/posts/python-wsgi-server/
+https://stackoverflow.com/questions/25217960/make-server-check-if-bind-to-port-succeeded
+https://mleue.com/posts/introduction-to-asgi/
+
